@@ -7,6 +7,8 @@ retry (10) {
     }
 }
 
+def buildTimeout = 600
+
 def releaseId
 def sourceRepo
 
@@ -88,7 +90,8 @@ pipeline {
 
             steps {
                 script {
-                    timeout(time: 600, unit: 'MINUTES') {
+                    timeout(time: buildTimeout, unit: 'MINUTES') {
+                        // TODO: Check if a build already exists and if so reuse it
                         def rc = sh(returnStatus: true, script: "./scratch-build.sh koji ${releaseId}-candidate git+https://src.fedoraproject.org/${sourceRepo}.git#${params.PR_COMMIT}")
                         if (fileExists('koji_url')) {
                             kojiUrl = readFile("${env.WORKSPACE}/koji_url").trim()
@@ -139,6 +142,18 @@ pipeline {
                     string(name: 'TEST_PROFILE', value: releaseId)
                 ]
             )
+        }
+        aborted {
+            script{
+                // This can be either because it has timed-out or the job was canceled
+                if (isTimeoutAborted(timeout: buildTimeout, unit: 'MINUTES')) {
+                        // If it times-out than we should do nothing, but send a report to dist-git that it failed
+                    sendMessage(type: 'error', artifactId: artifactId, pipelineMetadata: pipelineMetadata, dryRun: isPullRequest(), runUrl: kojiUrl)
+                } else {
+                        // Otherwise, it probably was canceled, so do not report anything, just cancel the koji build
+                    sh(returnStatus: true, script: "koji cancel ${taskId}")
+                }
+            }
         }
         failure {
             sendMessage(type: 'error', artifactId: artifactId, pipelineMetadata: pipelineMetadata, dryRun: isPullRequest(), runUrl: kojiUrl)
