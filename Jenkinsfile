@@ -51,6 +51,7 @@ pipeline {
         string(name: 'PR_UID', defaultValue: '', description: "Pagure's unique internal pull-request Id")
         string(name: 'PR_COMMIT', defaultValue: '', description: 'Commit Id (hash) of the last commit in the pull-request')
         string(name: 'PR_COMMENT', defaultValue: '0', description: "Pagure's internal Id of the comment which triggered CI testing; 0 (zero) if the testing was triggered by simply opening the pull-request")
+        booleanParam(name: 'IGNORE_TASK_ID_CACHE', defaultValue: false, description: "Ignore the previous commit's scratch-build cache")
     }
 
     stages {
@@ -101,8 +102,11 @@ pipeline {
                         }
                     }
                     timeout(time: buildTimeout, unit: 'MINUTES') {
-                        // TODO: Check if a build already exists and if so reuse it
-                        def rc = sh(returnStatus: true, script: "./scratch-build.sh koji ${releaseId}-candidate git+https://src.fedoraproject.org/${sourceRepo}.git#${params.PR_COMMIT}")
+                        // We don't really care if koji_find_task.py fails, the task_id/koji_url should be empty then
+                        def rc = sh(returnStdout: true, script: "python3 ./koji_task.py find ${sourceRepo} ${params.PR_COMMIT}")
+                        if (params.IGNORE_TASK_ID_CACHE || !fileExists('task_id')){
+                            rc = sh(returnStatus: true, script: "./scratch-build.sh koji ${releaseId}-candidate git+https://src.fedoraproject.org/${sourceRepo}.git#${params.PR_COMMIT}")
+                        }
                         if (fileExists('koji_url')) {
                             kojiUrl = readFile("${env.WORKSPACE}/koji_url").trim()
                         }
@@ -114,6 +118,8 @@ pipeline {
                                 error('Failed to scratch build the pull request.')
                             }
                         }
+                        // Similarly with koji_find_task, we don't really care if this fails
+                        rc = sh(returnStdout: true, script: "python3 ./koji_task.py save ${sourceRepo} ${params.PR_COMMIT}")
                         sendMessage(type: 'running', artifactId: artifactId, pipelineMetadata: pipelineMetadata, dryRun: isPullRequest(), runUrl: kojiUrl)
 
                         // Wait for the scratch-build to finish
