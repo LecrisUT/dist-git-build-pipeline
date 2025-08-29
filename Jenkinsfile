@@ -86,10 +86,20 @@ pipeline {
             environment {
                 KOJI_KEYTAB = credentials('fedora-keytab')
                 KRB_PRINCIPAL = 'bpeck/jenkins-continuous-infra.apps.ci.centos.org@FEDORAPROJECT.ORG'
+                // TODO: What's the actual host?
+                VALKEY_HOST = "localhost"
             }
 
             steps {
                 script {
+                    lock("check-concurrent-builds") {
+                        def jobname = env.JOB_NAME
+                        def output = sh(returnStdout: true, script: "python3 ./jenkins_build.py replace ${sourceRepo} ${params.PR_ID}").trim()
+                        if (output != null && output != '') {
+                            def job = Jenkins.instance.getItemByFullName(jobname)
+                            job.getBuildByNumber(output).doStop()
+                        }
+                    }
                     timeout(time: buildTimeout, unit: 'MINUTES') {
                         // TODO: Check if a build already exists and if so reuse it
                         def rc = sh(returnStatus: true, script: "./scratch-build.sh koji ${releaseId}-candidate git+https://src.fedoraproject.org/${sourceRepo}.git#${params.PR_COMMIT}")
@@ -121,6 +131,9 @@ pipeline {
 
     post {
         success {
+            lock("check-concurrent-builds") {
+                sh(script: "python3 ./jenkins_build.py finish ${sourceRepo} ${params.PR_ID}")
+            }
             sendMessage(type: 'complete', artifactId: artifactId, pipelineMetadata: pipelineMetadata, dryRun: isPullRequest(), runUrl: kojiUrl)
 
             // Run dist-git tests on the scratch build, and report results back to the pull request
